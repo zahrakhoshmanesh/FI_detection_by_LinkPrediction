@@ -1,0 +1,30 @@
+---
+title: "LinkPrediction"
+author: "Zahra Khoshmanesh"
+date: "2/11/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#install.packages("linkprediction")
+library(linkprediction)
+#install.packages("igraph")
+library(igraph)
+```
+
+```{r}
+
+if(requireNamespace("igraph")) {
+g <- igraph::make_graph(c("A", "B", "B", "C", "C", "D"), directed = FALSE)
+# Adamic-Adar
+proxfun(g, method="aa", value="edgelist")
+# Random Walk with Restart
+proxfun(g, method="rwr", value="edgelist")
+}
+
+```
+
