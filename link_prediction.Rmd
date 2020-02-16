@@ -14,17 +14,348 @@ knitr::opts_chunk$set(echo = TRUE)
 library(linkprediction)
 #install.packages("igraph")
 library(igraph)
+
+library(ggplot2)
+library(lattice)
+library(caret)
+library(C50)
+library(kernlab)
+library(mlbench)
+library(randomForest)
+library(caretEnsemble)
+library(MASS)
+library(klaR)
+library(nnet)
 ```
 
 ```{r}
+#creating graph of interactions
+el_name <- mdat <- matrix(c("Decrypt","Forward",
+                       "AddressBook","Encrypt",
+                       "Sign","Verify",
+                       "Sign","Forward",
+                       "Encrypt","Decrypt",
+                       "Encrypt","Verify",
+                       "Encrypt","AutoRespond",
+                       "Encrypt","Forward",
+                       "Decrypt","AutoRespond",
+                       "Verify","Forward"), nrow = 10, ncol = 2, byrow = TRUE)
 
-if(requireNamespace("igraph")) {
-g <- igraph::make_graph(c("A", "B", "B", "C", "C", "D"), directed = FALSE)
-# Adamic-Adar
-proxfun(g, method="aa", value="edgelist")
-# Random Walk with Restart
-proxfun(g, method="rwr", value="edgelist")
-}
+el <- mdat <- matrix(c(1,2,
+                       3,4,
+                       5,6,
+                       5,2,
+                       4,1,
+                       4,6,
+                       4,7,
+                       4,2,
+                       1,7,
+                       6,2), nrow = 10, ncol = 2, byrow = TRUE)
+
+el 
+g <- graph_from_edgelist(el,directed = FALSE)
+g
+
 
 ```
+
+```{r}
+plot(g, layout=layout_with_kk, vertex.color="green")
+
+```
+
+
+
+
+```{r}
+aa <-proxfun(g, method="aa", value="edgelist")
+as.data.frame(aa)
+names(aa)[3] <- "adar"
+
+# proxfun(g, method="act", value="edgelist")
+
+
+# proxfun(g, method="act_n", value="edgelist")
+
+
+cn <- proxfun(g, method="cn", value="edgelist")
+as.data.frame(cn)
+names(cn)[3] <- "commonneighbour"
+
+merge1 <- merge(aa,cn,by=c("from","to"))
+
+cos <- proxfun(g, method="cos", value="edgelist")
+as.data.frame(aa)
+names(cos)[3] <- "cos"
+
+merge2 <- merge(merge1,cos,by=c("from","to"))
+ 
+# proxfun(g, method="cos_l", value="edgelist")
+
+
+
+# proxfun(g, method="dist", value="edgelist")
+
+
+
+# proxfun(g, method="hdi", value="edgelist")
+
+
+
+# proxfun(g, method="hpi", value="edgelist")
+
+
+jaccard <- proxfun(g, method="jaccard", value="edgelist")
+as.data.frame(jaccard)
+names(jaccard)[3] <- "jaccard"
+ 
+merge3 <- merge(merge2,jaccard,by=c("from","to"))
+
+
+katz <- proxfun(g, method="katz", value="edgelist")
+as.data.frame(katz)
+names(katz)[3] <- "katz"
+ 
+merge4 <- merge(merge3,katz,by=c("from","to")) 
+ 
+ 
+# proxfun(g, method="l", value="edgelist")
+# proxfun(g, method="lhn_local", value="edgelist")
+# proxfun(g, method="lhn_global", value="edgelist")
+# proxfun(g, method="lp", value="edgelist")
+# proxfun(g, method="mf", value="edgelist")
+# proxfun(g, method="pa", value="edgelist")
+# proxfun(g, method="ra", value="edgelist")
+# proxfun(g, method="rwr", value="edgelist")
+# proxfun(g, method="sor", value="edgelist")
+```
+
+```{r}
+merge4$interaction<-c(1,0,1,0,0,1,1,0,1,1,1,0,0,0,0,0,1,1,0,1,1,0,1,0,0,0,1,0,1,1,0,1,0,0,1,0)
+merge4$interaction <- as.factor(merge4$interaction)
+levels(merge4$interaction)[1]<- "Not_FI"
+levels(merge4$interaction)[2]<- "FI"
+```
+
+
+
+
+
+
+```{r}
+X <- merge4[,!names(merge4) %in% c("interaction")]
+y <- merge4[,c("interaction")]
+
+
+#partition data to train and test
+set.seed(123)
+library(caret)
+library(caretEnsemble)
+part.index <- createDataPartition(merge4$interaction, 
+                                  p = 1,                         
+                                  list = FALSE)
+X_train <- X[part.index, ]
+X_test <- X[-part.index, ]
+y_train <- y[part.index]
+y_test <- y[-part.index]
+
+
+```
+
+
+
+```{r}
+library(mlbench)
+library(caret)
+#install.packages('caretEnsemble')
+library(doParallel)
+library(caretEnsemble)
+library(xgboost)
+library(kernlab)
+library(randomForest)
+library(rpart)
+library(gbm)
+library(fastAdaboost)
+registerDoParallel(4)
+getDoParWorkers()
+
+
+
+
+#use cross validation
+set.seed(123)
+my_control <- trainControl(method = "cv", # for “cross-validation”
+                           number = 5, # number of k-folds
+                           index = createFolds(merge4$interaction, 5),
+                           savePredictions = "final",
+                           allowParallel = TRUE,
+                           classProbs=TRUE)
+
+
+
+
+set.seed(222)
+model_list <- caretList(as.data.frame(X_train),
+                        as.factor(y_train),
+                        trControl = my_control,
+                        methodList = c( "rf",
+                                        "nb",
+                                        "svmPoly", 
+                                        "nnet", 
+                                        "C5.0",
+                                        "xgbTree"
+                                       ),
+                        tuneList = NULL,
+                        continue_on_fail = FALSE , 
+                        preProcess = c("center","scale")
+                        )
+
+options(digits = 3)
+model_results <- data.frame(
+  RF = min(model_list$rf$results$Accuracy),
+  C5 = min(model_list$C5.0$results$Accuracy),
+  nb = min(model_list$nb$results$Accuracy),
+  nnet = min(model_list$nnet$results$Accuracy),
+  svmPoly = min(model_list$svmPoly$results$Accuracy),
+  xgbTree = min(model_list$xgbTree$results$Accuracy)
+  #gbm = min(model_list$gbm$results$Accuracy),
+  #adaboost = min(model_list$adaboost$results$Accuracy)
+ )
+print(model_results)
+
+
+resamples <- resamples(model_list)
+dotplot(resamples, metric = "Accuracy")
+
+
+modelCor(resamples)
+
+```
+
+
+
+```{r}
+set.seed(222)
+ensemble_1 <- caretEnsemble(model_list, 
+                            metric = "Accuracy", 
+                            trControl = my_control)
+summary(ensemble_1)
+
+plot(ensemble_1)
+```
+
+
+
+```{r}
+set.seed(123)
+lm_model <- train(X_train,
+                       y_train,
+                       trControl = my_control,
+                       method = "rf",
+                       metric = "Accuracy",
+                       preProcess = c("center","scale"),
+                       importance = TRUE)
+plot(varImp(lm_model))
+```
+
+
+
+```{r}
+# PREDICTIONS
+pred_rf <- predict.train(model_list$rf, newdata = X_test)
+pred_nb <- predict.train(model_list$nb, newdata = X_test)
+pred_svm <- predict.train(model_list$svmPoly, newdata = X_test)
+pred_nnet <- predict.train(model_list$nnet, newdata = X_test)
+predict_ens1 <- predict(ensemble_1, newdata = X_test)
+# RMSE
+pred_RMSE <- c(ensemble_1 = confusionMatrix(predict_ens1, y_test),
+                        #ensemble_2 = RMSE(predict_ens2, y_test),
+                        rf = confusionMatrix(pred_rf, y_test),
+                        SVM = confusionMatrix(pred_svm, y_test),
+                        pred_nb = confusionMatrix(pred_nb, y_test),
+                        #RF = RMSE(pred_rf, y_test),
+                        pred_nnet = confusionMatrix(pred_nnet, y_test))
+print(pred_RMSE)
+```
+
+
+Q 2: add class similarity improve accuracy?
+
+
+
+```{r}
+#add jaccard_class similarity
+data_inclue_class_sim <- merge4
+data_inclue_class_sim$jaccard_class_sim <- c(0.17,0,0,0.09,0.14,0.17,0.17,0,0,0,0.1,0.11,0,0,0,0,0,0,0.12,0.17,0,0.09,0,0.12,0.07,0.14,0.1,0,0.17,0.07,0.1,0.17,0.11,0,0,0.1)
+
+data_inclue_class_sim$hamming_class_sim <- c(0.94,0.85,0.87,0.87,0.92,0.94,0.94,0.81,0.84,0.81,0.89,0.9,0.85,0.81,0.8,0.81,0.87,0.84,0.82,0.87,0.84,0.87,0.81,0.82,0.82,0.92,0.89,0.8,0.87,
+                                             0.82,0.89,0.94,0.9,0.81,0.84,0.89)
+
+
+X <- data_inclue_class_sim[,!names(data_inclue_class_sim) %in% c("interaction")]
+y <- data_inclue_class_sim[,c("interaction")]
+
+
+#partition data to train and test
+part.index <- createDataPartition(data_inclue_class_sim$interaction, 
+                                  p = 1,                         
+                                  list = FALSE)
+X_train <- X[part.index, ]
+X_test <- X[-part.index, ]
+y_train <- y[part.index]
+y_test <- y[-part.index]
+
+
+set.seed(12333)
+my_control <- trainControl(method = "cv", # for “cross-validation”
+                           number = 5, # number of k-folds
+                           index = createFolds(data_inclue_class_sim$interaction, 5),
+                           savePredictions = "final",
+                           allowParallel = TRUE,
+                           classProbs=TRUE)
+
+
+
+
+set.seed(22233)
+model_list <- caretList(as.data.frame(X_train),
+                        as.factor(y_train),
+                        trControl = my_control,
+                        methodList = c( "rf",
+                                        "nb",
+                                        "svmPoly", 
+                                        "nnet", 
+                                        "C5.0",
+                                        "xgbTree"
+                                       ),
+                        tuneList = NULL,
+                        continue_on_fail = FALSE , 
+                        preProcess = c("center","scale")
+                        )
+
+options(digits = 3)
+model_results <- data.frame(
+  RF = min(model_list$rf$results$Accuracy),
+  C5 = min(model_list$C5.0$results$Accuracy),
+  nb = min(model_list$nb$results$Accuracy),
+  nnet = min(model_list$nnet$results$Accuracy),
+  svmPoly = min(model_list$svmPoly$results$Accuracy),
+  xgbTree = min(model_list$xgbTree$results$Accuracy)
+  #gbm = min(model_list$gbm$results$Accuracy),
+  #adaboost = min(model_list$adaboost$results$Accuracy)
+ )
+print(model_results)
+
+
+resamples <- resamples(model_list)
+dotplot(resamples, metric = "Accuracy")
+
+
+modelCor(resamples)
+
+
+
+
+```
+
 
