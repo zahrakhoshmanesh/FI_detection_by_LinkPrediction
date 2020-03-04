@@ -41,6 +41,12 @@ el_name <- mdat <- matrix(c("Decrypt","Forward",
                        "Decrypt","AutoRespond",
                        "Verify","Forward"), nrow = 10, ncol = 2, byrow = TRUE)
 
+interaction_graph <- graph_from_edgelist(el_name,directed = FALSE)
+interaction_graph
+
+plot(interaction_graph, layout=layout_with_kk, vertex.color="green")
+
+
 el <- mdat <- matrix(c(1,2,
                        3,4,
                        5,6,
@@ -72,7 +78,6 @@ aa <-proxfun(g, method="aa", value="edgelist")
 as.data.frame(aa)
 names(aa)[3] <- "adar"
 
-# proxfun(g, method="act", value="edgelist")
 
 
 # proxfun(g, method="act_n", value="edgelist")
@@ -117,24 +122,54 @@ as.data.frame(katz)
 names(katz)[3] <- "katz"
  
 merge4 <- merge(merge3,katz,by=c("from","to")) 
+
+#Average Commute Time (Fouss, Pirotte, Renders, and Saerens 2007)
+
+act <- proxfun(g, method="act", value="edgelist")
+as.data.frame(act)
+names(act)[3] <- "Average_Commute_Time"
+
+#resource allocation (Zhou et al. 2009)
+
+ra <- proxfun(g, method="ra", value="edgelist")
+as.data.frame(ra)
+names(ra)[3] <- "resource_allocation" 
+
+merge5 <- merge(act,ra,by=c("from","to"))
+
+merge6 <- merge(merge4,merge5,by=c("from","to"))
  
- 
+
+
+#Local Path Index (Zhou, Lu, and Zhang 2009)
+lp <- proxfun(g, method="lp", value="edgelist")
+as.data.frame(lp)
+names(lp)[3] <- "Local_Path_Index"
+
+#random walk with restart (Brin and Page 1998). Additional argument alpha (default value 0.3) is the probability that the walk will restart after a step.
+rwr <- proxfun(g, method="rwr", value="edgelist")
+as.data.frame(rwr)
+names(rwr)[3] <- "random_walk_with_restart"
+
+merge7 <- merge(lp,rwr,by=c("from","to"))
+
+merge8 <- merge(merge6,merge7,by=c("from","to"))
+
+
+# proxfun(g, method="sor", value="edgelist")
+# proxfun(g, method="mf", value="edgelist")
+# proxfun(g, method="pa", value="edgelist")
 # proxfun(g, method="l", value="edgelist")
 # proxfun(g, method="lhn_local", value="edgelist")
 # proxfun(g, method="lhn_global", value="edgelist")
-# proxfun(g, method="lp", value="edgelist")
-# proxfun(g, method="mf", value="edgelist")
-# proxfun(g, method="pa", value="edgelist")
-# proxfun(g, method="ra", value="edgelist")
-# proxfun(g, method="rwr", value="edgelist")
-# proxfun(g, method="sor", value="edgelist")
+
 ```
 
 ```{r}
-merge4$interaction<-c(1,0,1,0,0,1,1,0,1,1,1,0,0,0,0,0,1,1,0,1,1,0,1,0,0,0,1,0,1,1,0,1,0,0,1,0)
-merge4$interaction <- as.factor(merge4$interaction)
-levels(merge4$interaction)[1]<- "Not_FI"
-levels(merge4$interaction)[2]<- "FI"
+merge8$interaction<-c(1,0,1,0,0,1,1,0,1,1,1,0,0,0,0,0,1,1,0,1,1,0,1,0,0,0,1,0,1,1,0,1,0,0,1,0)
+merge8$interaction <- as.factor(merge8$interaction)
+levels(merge8$interaction)[1]<- "Not_FI"
+levels(merge8$interaction)[2]<- "FI"
 ```
 
 
@@ -143,15 +178,15 @@ levels(merge4$interaction)[2]<- "FI"
 
 
 ```{r}
-X <- merge4[,!names(merge4) %in% c("interaction")]
-y <- merge4[,c("interaction")]
+X <- merge8[,!names(merge8) %in% c("interaction")]
+y <- merge8[,c("interaction")]
 
 
 #partition data to train and test
 set.seed(123)
 library(caret)
 library(caretEnsemble)
-part.index <- createDataPartition(merge4$interaction, 
+part.index <- createDataPartition(merge8$interaction, 
                                   p = 1,                         
                                   list = FALSE)
 X_train <- X[part.index, ]
@@ -186,7 +221,7 @@ getDoParWorkers()
 set.seed(123)
 my_control <- trainControl(method = "cv", # for “cross-validation”
                            number = 5, # number of k-folds
-                           index = createFolds(merge4$interaction, 5),
+                           index = createFolds(merge8$interaction, 5),
                            savePredictions = "final",
                            allowParallel = TRUE,
                            classProbs=TRUE)
@@ -285,7 +320,7 @@ Q 2: add class similarity improve accuracy?
 
 ```{r}
 #add jaccard_class similarity
-data_inclue_class_sim <- merge4
+data_inclue_class_sim <- merge8
 data_inclue_class_sim$jaccard_class_sim <- c(0.17,0,0,0.09,0.14,0.17,0.17,0,0,0,0.1,0.11,0,0,0,0,0,0,0.12,0.17,0,0.09,0,0.12,0.07,0.14,0.1,0,0.17,0.07,0.1,0.17,0.11,0,0,0.1)
 
 data_inclue_class_sim$hamming_class_sim <- c(0.94,0.85,0.87,0.87,0.92,0.94,0.94,0.81,0.84,0.81,0.89,0.9,0.85,0.81,0.8,0.81,0.87,0.84,0.82,0.87,0.84,0.87,0.81,0.82,0.82,0.92,0.89,0.8,0.87,
