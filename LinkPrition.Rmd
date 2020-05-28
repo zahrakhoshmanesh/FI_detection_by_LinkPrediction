@@ -1,0 +1,449 @@
+---
+title: "LinkPrediction"
+author: "Zahra Khoshmanesh"
+date: "2/11/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#install.packages("linkprediction")
+library(linkprediction)
+#install.packages("igraph")
+library(igraph)
+
+library(ggplot2)
+library(lattice)
+library(caret)
+library(C50)
+library(kernlab)
+library(mlbench)
+library(randomForest)
+library(caretEnsemble)
+library(MASS)
+library(klaR)
+library(nnet)
+```
+
+```{r}
+#creating graph of interactions
+el_name <- matrix(c("Decrypt","Forward",
+                       "AddressBook","Encrypt",
+                       "Sign","Verify",
+                       "Sign","Forward",
+                       "Encrypt","Decrypt",
+                       "Encrypt","Verify",
+                       "Encrypt","AutoRespond",
+                       "Encrypt","Forward",
+                       "Decrypt","AutoRespond",
+                       "Verify","Forward"), nrow = 10, ncol = 2, byrow = TRUE)
+
+interaction_graph <- graph_from_edgelist(el_name,directed = FALSE)
+interaction_graph
+
+plot(interaction_graph, layout=layout_with_kk, vertex.color="green")
+
+
+el <- matrix(c(1,2,
+                       3,4,
+                       5,6,
+                       5,2,
+                       4,1,
+                       4,6,
+                       4,7,
+                       4,2,
+                       1,7,
+                       6,2), nrow = 10, ncol = 2, byrow = TRUE)
+
+el 
+g <- graph_from_edgelist(el,directed = FALSE)
+g
+
+
+```
+
+```{r}
+plot(g, layout=layout_with_kk, vertex.color="green")
+
+```
+
+
+
+
+```{r}
+library('dplyr')
+aa <-proxfun(g, method="aa", value="edgelist") %>% filter(to<from )
+as.data.frame(aa)
+names(aa)[3] <- "adar"
+
+
+cn <- proxfun(g, method="cn", value="edgelist")%>% filter(to<from )
+as.data.frame(cn)
+names(cn)[3] <- "commonneighbour"
+
+merge1 <- merge(aa,cn,by=c("from","to"),all = TRUE)
+
+cos <- proxfun(g, method="cos", value="edgelist")%>% filter(to<from )
+as.data.frame(aa)
+names(cos)[3] <- "cos"
+
+merge2 <- merge(merge1,cos,by=c("from","to"),all = TRUE)
+ 
+# proxfun(g, method="cos_l", value="edgelist")
+
+
+
+jaccard <- proxfun(g, method="jaccard", value="edgelist")%>% filter(to<from )
+as.data.frame(jaccard)
+names(jaccard)[3] <- "jaccard"
+ 
+merge3 <- merge(merge2,jaccard,by=c("from","to"),all = TRUE)
+
+
+katz <- proxfun(g, method="katz", value="edgelist")%>% filter(to<from )
+as.data.frame(katz)
+names(katz)[3] <- "katz"
+ 
+merge4 <- merge(merge3,katz,by=c("from","to"),all = TRUE) 
+
+
+#resource allocation (Zhou et al. 2009)
+
+ra <- proxfun(g, method="ra", value="edgelist")%>% filter(to<from )
+as.data.frame(ra)
+names(ra)[3] <- "resource_allocation" 
+
+merge6 <- merge(merge4,ra,by=c("from","to"),all = TRUE)
+ 
+
+
+#Local Path Index (Zhou, Lu, and Zhang 2009)
+lp <- proxfun(g, method="lp", value="edgelist")%>% filter(to<from )
+as.data.frame(lp)
+names(lp)[3] <- "Local_Path_Index"
+
+#random walk with restart (Brin and Page 1998). Additional argument alpha (default value 0.3) is the probability that the walk will restart after a step.
+rwr <- proxfun(g, method="rwr", value="edgelist")%>% filter(to<from )
+as.data.frame(rwr)
+names(rwr)[3] <- "random_walk_with_restart"
+
+merge7 <- merge(lp,rwr,by=c("from","to"),all = TRUE)
+
+merge8 <- merge(merge6,merge7,by=c("from","to"),all = TRUE)
+
+
+```
+
+```{r}
+merge8[is.na(merge8)] <- 0
+sum(is.na(merge8))
+```
+```{r}
+merge8 %>% dplyr::select(from,to)
+```
+
+1--2 3--4 5--6 2--5 1--4 4--6 4--7 2--4 1--7 2--6
+
+```{r}
+merge8$interaction<-c(1,0,
+                      0,1,
+                      1,1,
+                      0,1,
+                      0,0,
+                      0,1,
+                      0,1,
+                      1,1,
+                      0,0,
+                      1,0,
+                      0)
+
+merge8$interaction <- as.factor(merge8$interaction)
+merge8 <- merge8 %>% mutate(interaction=factor(interaction,levels = c("1","0")))
+levels(merge8$interaction)[1]<- "yes"
+levels(merge8$interaction)[2]<- "no"
+
+```
+
+
+
+```{r}
+# Libraries ---------------------------------------------------------------
+library(caret) # To train ML algorithms
+library(dplyr) # Required for %>% operators in custom function below
+library(caretEnsemble) # To train multiple caret models
+library(lattice) # Required for plotting, should be loaded alongside caret
+library(gridExtra) # Required for plotting multiple plots
+library(rpart)
+
+# Custom function ---------------------------------------------------------
+# The function requires list of models as input and is used in for loop 
+plot_importance <- function(importance_list, imp, algo_names) {
+  importance <- importance_list[[imp]]$importance
+  model_title <- algo_names[[imp]]
+  if (ncol(importance) < 2) { # Plot dotplot if dim is ncol < 2
+    importance %>%
+      as.matrix() %>%
+      dotplot(main = model_title)
+  } else { # Plot heatmap if ncol > 2
+    importance %>%
+      as.matrix() %>%
+      levelplot(xlab = NULL, ylab = NULL, main = model_title, scales = list(x = list(rot = 45)))
+  }
+}
+
+# Tuning parameters -------------------------------------------------------
+# Set algorithms I wish to fit
+# Rather than using methodList as provided above, I've switched to tuneList because I need to control tuning parameters of random forest algorithm.
+
+my_algorithms <- list(
+  glmnet = caretModelSpec(method = "glmnet"),
+  #rpart = caretModelSpec(method = "rpart"),
+  svmRadial = caretModelSpec(method = "svmRadial"),
+  rf = caretModelSpec(method = "rf", importance = TRUE), # Importance is not computed for "rf" by default
+  nnet = caretModelSpec(method = "nnet"),
+  knn = caretModelSpec(method = "knn"),
+  nb = caretModelSpec(method = "nb"),
+  c5= caretModelSpec(method = "C5.0"),
+  svmlinear=caretModelSpec(method = "svmLinear2"),
+  bayesglm=caretModelSpec(method = "bayesglm")
+  
+)
+
+# Define controls
+my_controls <- trainControl(
+  method = "cv",
+  savePredictions = "final",
+  number = 10
+)
+
+# Run the models all at once with caretEnsemble
+my_list_of_models <- caretList(interaction ~ .,
+  data = train,
+  tuneList = my_algorithms,
+  trControl = my_controls
+)
+
+
+# Extract variable importance ---------------------------------------------
+importance <- lapply(my_list_of_models, varImp)
+
+# Plotting variable immportance -------------------------------------------
+# Create second loop to go over extracted importance and plot it using plot()
+importance_plots <- list()
+for (imp in seq_along(importance)) {
+  # importance_plots[[imp]] <- plot(importance[[imp]])
+  importance_plots[[imp]] <- plot_importance(importance_list = importance, imp = imp, algo_names = names(my_list_of_models))
+}
+
+# Multiple plots at once
+do.call("grid.arrange", c(importance_plots))
+
+importance_plots
+```
+
+
+
+
+```{r}
+
+for (i in 1:length(importance)){
+  print(names(importance)[i])
+  print(importance[[i]])
+   #print(importance[[i]]$importance)
+  print(plot(importance[[i]],main=paste("Variable importance",names(importance)[i]))) 
+  #levelplot(importance[[i]]$importance,xlab = NULL, ylab = NULL, main = model_title, scales = list(x = list(rot = 45)))
+}
+```
+
+```{r}
+library(tidyverse)
+library(ggeasy)
+df <- data.frame(imp = importance[[1]]$importance)
+df2 <- df %>% 
+  tibble::rownames_to_column() %>% 
+  dplyr::rename("variable" = rowname) %>% 
+  dplyr::arrange(Overall) %>%
+  dplyr::mutate(variable = forcats::fct_inorder(variable))
+ggplot2::ggplot(df2) +
+  geom_col(aes(x = variable, y = Overall,fill=variable)) +
+  coord_flip() +
+  scale_fill_brewer() +
+  ggtitle("glmnet")+
+  ylab("Importance") +
+  theme_bw()+
+  guides(fill=FALSE)
+
+#####
+df <- data.frame(imp = importance[[4]]$importance)
+df2 <- df %>% 
+  tibble::rownames_to_column() %>% 
+  dplyr::rename("variable" = rowname) %>% 
+  dplyr::arrange(Overall) %>%
+  dplyr::mutate(variable = forcats::fct_inorder(variable))
+ggplot2::ggplot(df2) +
+  geom_col(aes(x = variable, y = Overall,fill=variable)) +
+  coord_flip() +
+  scale_fill_brewer() +
+  ggtitle("nnet")+
+  ylab("Importance") +
+  theme(plot.title = element_text(hjust = 0.5))+
+  theme_bw()+
+  guides(fill=FALSE)
+
+
+#####
+df <- data.frame(imp = importance[[7]]$importance)
+df2 <- df %>% 
+  tibble::rownames_to_column() %>% 
+  dplyr::rename("variable" = rowname) %>% 
+  dplyr::arrange(Overall) %>%
+  dplyr::mutate(variable = forcats::fct_inorder(variable))
+ggplot2::ggplot(df2) +
+  geom_col(aes(x = variable, y = Overall,fill=variable)) +
+  coord_flip() +
+  scale_fill_brewer() +
+  ggtitle("C5.0")+
+  ylab("Importance") +
+  theme(plot.title = element_text(hjust = 0.5))+
+  theme_bw()+
+  guides(fill=FALSE)
+
+####
+df <- data.frame(imp = importance[[3]]$importance)
+df2 <- df %>% 
+  tibble::rownames_to_column() %>% 
+  dplyr::rename("variable" = rowname) %>% 
+  dplyr::arrange(imp.yes) %>%
+  dplyr::mutate(variable = forcats::fct_inorder(variable))
+ggplot2::ggplot(df2) +
+  geom_col(aes(x = variable, y = imp.yes,fill=variable)) +
+  coord_flip() +
+  scale_fill_brewer() +
+  ggtitle("Random Forest")+
+  ylab("Importance") +
+  theme(plot.title = element_text(hjust = 0.5))+
+  theme_bw()+
+  guides(fill=FALSE)
+
+###
+df <- data.frame(imp = importance[[2]]$importance)
+df2 <- df %>% 
+  tibble::rownames_to_column() %>% 
+  dplyr::rename("variable" = rowname) %>% 
+  dplyr::arrange(imp.yes) %>%
+  dplyr::mutate(variable = forcats::fct_inorder(variable))
+ggplot2::ggplot(df2) +
+  geom_col(aes(x = variable, y = imp.yes,fill=variable)) +
+  coord_flip() +
+  scale_fill_brewer() +
+  ggtitle("SVMRadial")+
+  ylab("Importance") +
+  theme(plot.title = element_text(hjust = 0.5))+
+  theme_bw()+
+  guides(fill=FALSE)
+
+###
+df <- data.frame(imp = importance[[5]]$importance)
+df2 <- df %>% 
+  tibble::rownames_to_column() %>% 
+  dplyr::rename("variable" = rowname) %>% 
+  dplyr::arrange(imp.yes) %>%
+  dplyr::mutate(variable = forcats::fct_inorder(variable))
+ggplot2::ggplot(df2) +
+  geom_col(aes(x = variable, y = imp.yes,fill=variable)) +
+  coord_flip() +
+  scale_fill_brewer() +
+  ggtitle("knn")+
+  ylab("Importance") +
+  theme(plot.title = element_text(hjust = 0.5))+
+  theme_bw()+
+  guides(fill=FALSE)
+
+###
+
+df <- data.frame(imp = importance[[6]]$importance)
+df2 <- df %>% 
+  tibble::rownames_to_column() %>% 
+  dplyr::rename("variable" = rowname) %>% 
+  dplyr::arrange(imp.yes) %>%
+  dplyr::mutate(variable = forcats::fct_inorder(variable))
+ggplot2::ggplot(df2) +
+  geom_col(aes(x = variable, y = imp.yes,fill=variable)) +
+  coord_flip() +
+  scale_fill_brewer() +
+  ggtitle("nb")+
+  ylab("Importance") +
+  theme(plot.title = element_text(hjust = 0.5))+
+  theme_bw()+
+  guides(fill=FALSE)
+
+###
+df <- data.frame(imp = importance[[8]]$importance)
+df2 <- df %>% 
+  tibble::rownames_to_column() %>% 
+  dplyr::rename("variable" = rowname) %>% 
+  dplyr::arrange(imp.yes) %>%
+  dplyr::mutate(variable = forcats::fct_inorder(variable))
+ggplot2::ggplot(df2) +
+  geom_col(aes(x = variable, y = imp.yes,fill=variable)) +
+  coord_flip() +
+  scale_fill_brewer() +
+  ggtitle("svmlinear")+
+  ylab("Importance") +
+  theme(plot.title = element_text(hjust = 0.5))+
+  theme_bw()+
+  guides(fill=FALSE)
+
+
+###
+df <- data.frame(imp = importance[[9]]$importance)
+df2 <- df %>% 
+  tibble::rownames_to_column() %>% 
+  dplyr::rename("variable" = rowname) %>% 
+  dplyr::arrange(imp.yes) %>%
+  dplyr::mutate(variable = forcats::fct_inorder(variable))
+ggplot2::ggplot(df2) +
+  geom_col(aes(x = variable, y = imp.yes,fill=variable)) +
+  coord_flip() +
+  scale_fill_brewer() +
+  ggtitle("bayesglm")+
+  ylab("Importance") +
+  theme(plot.title = element_text(hjust = 0.5))+
+  theme_bw()+
+  guides(fill=FALSE)
+
+```
+
+training rsult
+
+```{r}
+my_list_of_models
+for (i in 1:8){
+  print(names(my_list_of_models)[i])
+  print(my_list_of_models[[i]])
+  print(plot(my_list_of_models[[i]],main=names(my_list_of_models)[i]))  
+}
+
+```
+
+
+preicction on test data
+
+```{r}
+#prediction on test data
+
+for (i in 1:length(my_list_of_models)){
+  print(names(my_list_of_models)[i])
+  pred <- predict(my_list_of_models[[i]],
+                   newdata = test)
+  cm <- confusionMatrix(pred,test$interaction,positive="yes")
+  print(cm)
+   
+}
+
+```
+
+
