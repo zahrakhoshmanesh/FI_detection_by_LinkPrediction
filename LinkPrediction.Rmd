@@ -168,6 +168,15 @@ levels(merge8$interaction)[2]<- "no"
 
 ```
 
+```{r}
+dataset=merge8 %>% dplyr::select(-c("to","from"))
+  
+############### divide to train and test ###########################
+  
+train.index <- createDataPartition(dataset$interaction, p = .8, list = FALSE)
+train <- dataset[ train.index,]
+test  <- dataset[-train.index,]
+```
 
 
 ```{r}
@@ -215,7 +224,7 @@ my_algorithms <- list(
 
 # Define controls
 my_controls <- trainControl(
-  method = "cv",
+  method = "repeatedcv",
   savePredictions = "final",
   number = 10
 )
